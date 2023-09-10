@@ -1,4 +1,4 @@
-use crate::pos::BoardPos;
+use crate::{pos::BoardPos, piece::PieceType};
 
 const BOARD_SIZE: usize = 8;
 
@@ -33,16 +33,6 @@ pub struct Tile {
 pub enum Color {
     White,
     Black,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum PieceType {
-    King,
-    Queen,
-    Rook,
-    Bishop,
-    Knight,
-    Pawn,
 }
 
 
