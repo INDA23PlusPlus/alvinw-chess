@@ -29,6 +29,15 @@ pub struct Tile {
     color: Color,
 }
 
+impl Tile {
+    pub fn new(piece: PieceType, color: Color) -> Tile {
+        Tile { piece, color }
+    }
+
+    pub fn piece(&self) -> PieceType { self.piece }
+    pub fn color(&self) -> Color { self.color }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Color {
     White,

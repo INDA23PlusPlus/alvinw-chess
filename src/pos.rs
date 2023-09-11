@@ -11,7 +11,7 @@ use std::fmt;
 /// 
 /// ## Example
 /// The position `b4` has a rank value `3` and a file value `1`.
-#[derive(PartialEq, Eq, Debug)]
+#[derive(PartialEq, Eq, Debug, Hash)]
 pub struct BoardPos {
     file: u8,
     rank: u8,
