@@ -11,7 +11,7 @@ use std::fmt;
 /// 
 /// ## Example
 /// The position `b4` has a rank value `3` and a file value `1`.
-#[derive(PartialEq, Eq, Debug, Hash)]
+#[derive(PartialEq, Eq, Hash, Clone)]
 pub struct BoardPos {
     file: u8,
     rank: u8,
@@ -67,6 +67,14 @@ impl BoardPos {
 impl fmt::Display for BoardPos {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}{}", self.file_char(), self.rank + 1)
+    }
+}
+
+impl fmt::Debug for BoardPos {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        // Using the pretty-printed position even when debugging makes debugging
+        // failing tests easier since the output is more readable.
+        write!(f, "{}", self)
     }
 }
 
