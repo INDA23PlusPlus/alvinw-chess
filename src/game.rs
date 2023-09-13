@@ -2,6 +2,9 @@ use std::collections::HashSet;
 
 use crate::{board::{Board, Color}, pos::BoardPos, piece::PieceType};
 
+/// The FEN for the starting position of the game.
+const STARTING_POSITION_FEN: &str = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+
 pub struct Game {
     board: Board,
     current_turn: Color,
@@ -28,7 +31,50 @@ enum MoveType {
     Attacking
 }
 
+#[derive(Debug)]
+pub enum FenParseError<'a> {
+    LargeSkip,
+    OutsideBoard(u8, u8),
+    InvalidPiece(char),
+    TooShort,
+    InvalidTurn(&'a str),
+}
+
 impl Game {
+
+    pub fn new() -> Self {
+        Self::from_fen(STARTING_POSITION_FEN).expect("Hardcoded FEN is valid.")
+    }
+
+    pub fn from_fen(fen: &str) -> Result<Self, FenParseError> {
+        let mut iter = fen.split_whitespace();
+        
+        let placement_data = iter.next().ok_or(FenParseError::TooShort)?;
+        let board = Board::from_fen_placement_data(placement_data)?;
+
+        let current_turn = iter.next().ok_or(FenParseError::TooShort)?;
+        let current_turn = match current_turn {
+            "w" => Color::White,
+            "b" => Color::Black,
+            _ => return Err(FenParseError::InvalidTurn(current_turn)),
+        };
+        
+        let _castling_availability = iter.next().ok_or(FenParseError::TooShort)?;
+        let _en_passant = iter.next().ok_or(FenParseError::TooShort)?;
+        let _halfmove_clock = iter.next().ok_or(FenParseError::TooShort)?;
+        let _fullmove_number = iter.next().ok_or(FenParseError::TooShort)?;
+
+        Ok(Self { board, current_turn })
+    }
+
+    pub fn to_fen(&self) -> String {
+        let mut str = String::new();
+        str.push_str(&self.board.to_fen_placement_data());
+        str.push(' ');
+        str.push(if self.current_turn == Color::White { 'w' } else { 'b' });
+        str.push_str(" - - 0 0"); // Castling, En passant TODO
+        str
+    }
 
     pub fn get_moveset(&self, pos: &BoardPos) -> Result<HashSet<BoardPos>, GetMovesetError> {
         let tile = self.board.get_tile(pos)
@@ -125,8 +171,9 @@ impl Game {
         delta_positions: [(i8, i8); COUNT]
     ) {
         for (delta_file, delta_rank) in delta_positions {
-            let option_move = self.try_move_once(&start, delta_file, delta_rank).and_then(|(pos, move_type)| Some(pos));
-            if let Some(pos) = option_move {
+            let option_move = self.try_move_once(&start, delta_file, delta_rank);
+
+            if let Some((pos, _move_type)) = option_move {
                 moveset.insert(pos);
             }
         }
@@ -225,6 +272,12 @@ impl Game {
 mod tests {
     use crate::{board::Tile, piece::PieceType};
     use super::*;
+
+    #[test]
+    fn new_game() {
+        // Ensure FEN parsing of starting position doesn't panic
+        Game::new();
+    }
 
     /// Prepare a game for a moveset test.
     /// 
