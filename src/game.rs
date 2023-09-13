@@ -10,6 +10,13 @@ pub struct Game {
     current_turn: Color,
 }
 
+#[derive(Debug)]
+pub enum MovePieceError {
+    NoTile,
+    NotCurrentTurn,
+    InvalidMove,
+}
+
 /// Errors returned from Game's `get_moveset`.
 #[derive(Debug)]
 pub enum GetMovesetError {
@@ -46,6 +53,8 @@ impl Game {
         Self::from_fen(STARTING_POSITION_FEN).expect("Hardcoded FEN is valid.")
     }
 
+    // FEN I/O
+
     pub fn from_fen(fen: &str) -> Result<Self, FenParseError> {
         let mut iter = fen.split_whitespace();
         
@@ -74,6 +83,30 @@ impl Game {
         str.push(if self.current_turn == Color::White { 'w' } else { 'b' });
         str.push_str(" - - 0 0"); // Castling, En passant TODO
         str
+    }
+
+    // Movement
+
+    pub fn move_piece(&mut self, from: &BoardPos, to: &BoardPos) -> Result<(), MovePieceError> {
+        let moveset = match self.get_moveset(from) {
+            Ok(moveset) => moveset,
+            Err(GetMovesetError::NoTile) => return Err(MovePieceError::NoTile),
+            Err(GetMovesetError::NotCurrentTurn) => return Err(MovePieceError::NotCurrentTurn),
+        };
+
+        if !moveset.contains(to) {
+            return Err(MovePieceError::InvalidMove);
+        }
+
+        let tile = self.board.remove_tile(from).expect("Move is already validated.");
+        self.board.set_tile(to, tile);
+
+        self.current_turn = match self.current_turn {
+            Color::White => Color::Black,
+            Color::Black => Color:: White,
+        };
+        
+        Ok(())
     }
 
     pub fn get_moveset(&self, pos: &BoardPos) -> Result<HashSet<BoardPos>, GetMovesetError> {
@@ -277,6 +310,15 @@ mod tests {
     fn new_game() {
         // Ensure FEN parsing of starting position doesn't panic
         Game::new();
+    }
+
+    #[test]
+    fn move_piece() {
+        let mut game = Game::new();
+        game.move_piece(&"e2".parse().unwrap(), &"e4".parse().unwrap()).unwrap();
+        // assert_eq!("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1", game.to_fen());
+        // Castling and en passant not yet implemented
+        assert_eq!("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b - - 0 0", game.to_fen());
     }
 
     /// Prepare a game for a moveset test.

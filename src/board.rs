@@ -21,6 +21,12 @@ impl Board {
         self.data[pos.rank() as usize][pos.file() as usize] = Some(tile);
     }
 
+    pub fn remove_tile(&mut self, pos: &BoardPos) -> Option<Tile> {
+        let existing = self.data[pos.rank() as usize][pos.file() as usize];
+        self.data[pos.rank() as usize][pos.file() as usize] = None;
+        return existing;
+    }
+
     pub fn from_fen_placement_data(fen: &str) -> Result<Self, FenParseError> {
         let mut board = Board::empty();
 
@@ -69,6 +75,7 @@ impl Board {
                     Some(tile) => {
                         if empty_count > 0 {
                             str.push_str(&empty_count.to_string());
+                            empty_count = 0;
                         }
                         let mut char = tile.piece.char();
                         if tile.color() == Color::White {
