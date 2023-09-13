@@ -19,6 +19,15 @@ pub enum GetMovesetError {
     NotCurrentTurn,
 }
 
+#[derive(PartialEq)]
+enum MoveType {
+    /// The piece is being moved to an unoccupied, empty tile.
+    ToEmpty,
+    /// The piece is being moved to a tile where an enemy piece is standing, which
+    /// will result in capturing the enemy piece.
+    Attacking
+}
+
 impl Game {
 
     pub fn get_moveset(&self, pos: &BoardPos) -> Result<HashSet<BoardPos>, GetMovesetError> {
@@ -67,39 +76,68 @@ impl Game {
                     (-2,  1), (-2, -1),
                 ]);
             },
-            PieceType::Pawn => todo!(),
+            PieceType::Pawn => {
+                // Calculate the forward direction for this team.
+                let dir: i8 = if tile.color() == Color::White { 1 } else { -1 };
+
+                // Note that ranks are specified in their internal form, aka the 0-indexed index.
+                let first_rank = if tile.color() == Color::White { 1 } else { 6 };
+
+                // Since pawns can never move backwards, we can be sure that it is the pawn's
+                // first move if it is located at the starting rank for pawns.
+                let is_first_move = pos.rank() == first_rank;
+
+                // Moving forward one tile is always possible (assuming it is valid in other
+                // regards).
+                self.try_moves_once(&mut moveset, &pos, [
+                    (0, dir)
+                ]);
+
+                // Moving two tiles is only possible if it is the pawn's first move and...
+                if is_first_move {
+                    let pos_one_forward = pos.offset(0, dir);
+                    let piece_one_forward = pos_one_forward.and_then(
+                        |pos_one_forward| self.board.get_tile(&pos_one_forward)
+                    );
+
+                    // ...there is no piece, regardless of color, one tile forward.
+                    if piece_one_forward.is_none() {
+                        self.try_moves_once(&mut moveset, &pos, [
+                            (0, 2 * dir)
+                        ]);
+                    }
+                }
+
+                // Diagonal moves are only possible when attacking.
+                self.try_attacking_move(&mut moveset, &pos, -1, dir);
+                self.try_attacking_move(&mut moveset, &pos, 1, dir);
+            },
         }
 
         Ok(moveset)
     }
 
-    fn try_moves(&self,
-        moveset: &mut HashSet<BoardPos>,
-        moves: Vec<Option<BoardPos>>
-    ) {
-        for option_move in moves {
-            if let Some(m) = option_move {
-                moveset.insert(m);
-            }
-        }
-    }
-
+    /// Test the specified delta position moves and add the valid moves to the
+    /// moveset.
     fn try_moves_once<const COUNT: usize>(&self,
         moveset: &mut HashSet<BoardPos>,
         start: &BoardPos,
         delta_positions: [(i8, i8); COUNT]
     ) {
-        let moves = delta_positions.map(|(delta_file, delta_rank)| {
-            self.try_move_once(&start, delta_file, delta_rank)
-        });
-        self.try_moves(moveset, Vec::from(moves));
+        for (delta_file, delta_rank) in delta_positions {
+            let option_move = self.try_move_once(&start, delta_file, delta_rank).and_then(|(pos, move_type)| Some(pos));
+            if let Some(pos) = option_move {
+                moveset.insert(pos);
+            }
+        }
     }
 
+    /// Test a move, and if it is a valid move, return it.
     fn try_move_once(&self,
         start: &BoardPos,
         delta_file: i8,
         delta_rank: i8
-    ) -> Option<BoardPos> {
+    ) -> Option<(BoardPos, MoveType)> {
         let pos = start.offset(delta_file, delta_rank);
         let pos = match pos {
             Some(pos) => pos,
@@ -109,7 +147,7 @@ impl Game {
         let tile = self.board.get_tile(&pos);
         let tile = match tile {
             Some(tile) => tile,
-            None => return Some(pos), // No tile at the position means we can move there
+            None => return Some((pos, MoveType::ToEmpty)), // No tile at the position means we can move there
         };
 
         if tile.color() == self.current_turn {
@@ -117,10 +155,35 @@ impl Game {
             return None;
         }
 
-        // Taking enemy pieces is fine
-        Some(pos)
+        // Capturing enemy pieces is fine
+        Some((pos, MoveType::Attacking))
     }
 
+    /// Test an attacking move, and if it is a valid move, return it.
+    ///
+    /// Attacking moves are only valid if it involves capturing an enemy piece.
+    fn try_attacking_move(&self,
+        moveset: &mut HashSet<BoardPos>,
+        start: &BoardPos,
+        delta_file: i8,
+        delta_rank: i8
+    ) {
+        let option_move = self.try_move_once(start, delta_file, delta_rank);
+        if let Some((pos, move_type)) = option_move {
+            match move_type {
+                MoveType::ToEmpty => {},
+                MoveType::Attacking => {
+                    // Only attacking moves are valid.
+                    moveset.insert(pos);
+                }
+            }
+        }
+    }
+
+    /// Test the specified direction and add all possible moves to the moveset.
+    ///
+    /// The vectors array provides the directions that this method should try in a
+    /// repeated fashion until moving is no longer possible.
     fn try_moves_multiple<const COUNT: usize>(&self,
         moveset: &mut HashSet<BoardPos>,
         start: &BoardPos,
@@ -131,6 +194,7 @@ impl Game {
         }
     }
 
+    /// Test a direction and add all the possible moves to the moveset.
     fn try_move_multiple(&self,
         moveset: &mut HashSet<BoardPos>,
         start: &BoardPos,
@@ -140,11 +204,18 @@ impl Game {
         let mut pos = (*start).clone();
         loop {
             let new_pos = self.try_move_once(&pos, delta_file, delta_rank);
-            pos = match new_pos {
+            let new_move = match new_pos {
                 None => break,
-                Some(new_pos) => new_pos,
+                Some(new_move) => new_move,
             };
+            let (new_pos, move_type) = new_move;
+            pos = new_pos;
             moveset.insert(pos.clone());
+            if move_type == MoveType::Attacking {
+                // Attacking a piece is a valid move, but the piece can not move further after
+                // attacking, otherwise it would effectively be jumping over the enemy.
+                break;
+            }
         }
     }
 }
@@ -155,22 +226,31 @@ mod tests {
     use crate::{board::Tile, piece::PieceType};
     use super::*;
 
-    // Prepare a game for a moveset test.
+    /// Prepare a game for a moveset test.
+    /// 
+    /// The specified piece is placed at `e4`.
     fn prepare_moveset_test(piece: PieceType) -> (Game, BoardPos) {
+        let pos = "e4".parse().unwrap();
+        let game = prepare_moveset_test_at(piece, &pos);
+        (game, pos)
+    }
+
+    /// Prepare a game for a moveset test by placing the piece at the
+    /// specified position.
+    fn prepare_moveset_test_at(piece: PieceType, pos: &BoardPos) -> Game {
         const COLOR: Color = Color::White;
 
         let mut board = Board::empty();
-        let pos = "e4".parse().unwrap();
         let tile = Tile::new(piece, COLOR);
         board.set_tile(&pos, tile);
 
-        (Game {
+        Game {
             board,
             current_turn: COLOR
-        }, pos)
+        }
     }
 
-    // Format a set of board positions by sorting them and presenting their
+    /// Format a set of board positions by sorting them and presenting their
     /// human-readable format. This is a great way to compare two movesets.
     fn format_positions(set: &HashSet<BoardPos>) -> String {
         let mut arr = set.iter()
@@ -236,10 +316,15 @@ mod tests {
 
     #[test]
     fn rook_moves() {
-        let (game, pos) = prepare_moveset_test(PieceType::Rook);
+        let (mut game, pos) = prepare_moveset_test(PieceType::Rook);
+
+        let pos2 = "c4".parse().unwrap();
+        let enemy = Tile::new(PieceType::Pawn, Color::Black);
+        game.board.set_tile(&pos2, enemy);
+
         let actual = game.get_moveset(&pos).unwrap();
-        assert_moves_exist(&actual, "d4 e5 e7 h4 e3");
-        assert_moves_dont_exist(&actual, "e4 f5 d2 d7");
+        assert_moves_exist(&actual, "d4 c4 e5 e7 h4 e3");
+        assert_moves_dont_exist(&actual, "e4 f5 d2 d7 b4 a4");
     }
 
     #[test]
@@ -247,5 +332,31 @@ mod tests {
         let (game, pos) = prepare_moveset_test(PieceType::Knight);
         let actual = game.get_moveset(&pos).unwrap();
         assert_moves(&actual, "d6 f6 g5 g3 f2 d2 c3 c5");
+    }
+
+    #[test]
+    fn first_pawn_moves() {
+        let pos = "e2".parse().unwrap();
+        let game = prepare_moveset_test_at(PieceType::Pawn, &pos);
+        let actual = game.get_moveset(&pos).unwrap();
+        assert_moves(&actual, "e3 e4");
+    }
+
+    #[test]
+    fn moved_pawn_moves() {
+        let (game, pos) = prepare_moveset_test(PieceType::Pawn);
+        let actual = game.get_moveset(&pos).unwrap();
+        assert_moves(&actual, "e5");
+    }
+
+    #[test]
+    fn attacking_pawn_moves() {
+        let (mut game, pos) = prepare_moveset_test(PieceType::Pawn);
+        
+        let enemy = Tile::new(PieceType::Pawn, Color::Black);
+        game.board.set_tile(&"d5".parse().unwrap(), enemy);
+        
+        let actual = game.get_moveset(&pos).unwrap();
+        assert_moves(&actual, "d5 e5");
     }
 }
