@@ -13,18 +13,27 @@ impl Board {
         }
     }
 
+    /// Get the tile at the position, or `None` if there is no tile there.
     pub fn get_tile(&self, pos: &BoardPos) -> Option<Tile> {
         self.data[pos.rank() as usize][pos.file() as usize]
     }
 
+    /// Set the tile at the position.
     pub fn set_tile(&mut self, pos: &BoardPos, tile: Tile) {
         self.data[pos.rank() as usize][pos.file() as usize] = Some(tile);
     }
 
+    /// Remove the tile at the position.
     pub fn remove_tile(&mut self, pos: &BoardPos) -> Option<Tile> {
         let existing = self.data[pos.rank() as usize][pos.file() as usize];
         self.data[pos.rank() as usize][pos.file() as usize] = None;
         return existing;
+    }
+
+    /// If the `tile` parameter is `Some`, the tile is set, otherwise, the tile at
+    /// the position is removed.
+    pub fn set_or_remove_tile(&mut self, pos: &BoardPos, tile: Option<Tile>) {
+        self.data[pos.rank() as usize][pos.file() as usize] = tile;
     }
 
     pub fn from_fen_placement_data(fen: &str) -> Result<Self, FenParseError> {

@@ -1,6 +1,6 @@
 use crate::board::{Board, Color};
 
-use super::Game;
+use super::{Game, CastlingAvailability};
 
 #[derive(Debug)]
 pub enum FenParseError<'a> {
@@ -12,8 +12,6 @@ pub enum FenParseError<'a> {
 }
 
 impl Game {
-
-    // FEN I/O
 
     pub fn from_fen(fen: &str) -> Result<Self, FenParseError> {
         let mut iter = fen.split_whitespace();
@@ -28,12 +26,22 @@ impl Game {
             _ => return Err(FenParseError::InvalidTurn(current_turn)),
         };
         
-        let _castling_availability = iter.next().ok_or(FenParseError::TooShort)?;
+        let castling_availability = iter.next().ok_or(FenParseError::TooShort)?;
+
+        let white_castling = CastlingAvailability {
+            kingside: castling_availability.contains('K'),
+            queenside: castling_availability.contains('Q'),
+        };
+        let black_castling = CastlingAvailability {
+            kingside: castling_availability.contains('k'),
+            queenside: castling_availability.contains('q'),
+        };
+
         let _en_passant = iter.next().ok_or(FenParseError::TooShort)?;
         let _halfmove_clock = iter.next().ok_or(FenParseError::TooShort)?;
         let _fullmove_number = iter.next().ok_or(FenParseError::TooShort)?;
 
-        Ok(Self { board, current_turn })
+        Ok(Self { board, current_turn, white_castling, black_castling })
     }
 
     pub fn to_fen(&self) -> String {

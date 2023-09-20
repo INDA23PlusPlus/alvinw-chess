@@ -34,8 +34,6 @@ enum MoveType {
 
 impl Game {
 
-    // Movement
-
     pub fn move_piece(&mut self, from: &BoardPos, to: &BoardPos) -> Result<(), MovePieceError> {
         let moveset = match self.get_legal_moves(from) {
             Ok(moveset) => moveset,
@@ -47,8 +45,30 @@ impl Game {
             return Err(MovePieceError::InvalidMove);
         }
 
-        let tile = self.board.remove_tile(from).expect("Move is already validated.");
-        self.board.set_tile(to, tile);
+        let tile = self.board.get_tile(from).expect("Move is already validated.");
+
+        // Castling
+        if tile.piece() == PieceType::King && from.file().abs_diff(to.file()) == 2 {
+            // The king moved two tiles. This means we are castling.
+            let dir = if to.file() > from.file() { 1 } else { -1 };
+            
+            let new_rook_pos = from.offset(dir, 0)
+                .expect("Move is already validated by get_legal_moves");
+            
+            let rook_pos = self.find_rook(&new_rook_pos, &tile.color(), dir)
+                .expect("Move is already validated by get_legal_moves");
+
+            let rook = self.board.remove_tile(&rook_pos).expect("Rook exists.");
+            self.board.remove_tile(from);
+            self.board.set_tile(to, tile);
+            self.board.set_tile(&new_rook_pos, rook);
+
+        } else {
+            // Normal move
+            self.board.remove_tile(from);
+            self.board.set_tile(to, tile);
+        }
+
 
         self.current_turn = self.current_turn.opposite();
         
@@ -82,13 +102,13 @@ impl Game {
             return Err(GetMovesetError::NotCurrentTurn);
         }
 
-        let mut moveset = self.get_pseudo_legal_moves(pos);
+        let mut moveset = self.get_pseudo_legal_moves(pos, true);
         moveset.retain(|move_pos| {
             // Ensure the move does not move into a state of check.
             // Attempt the move.
 
             // Save tile on square.
-            let old_square = self.board.get_tile(move_pos);
+            let old_tile = self.board.get_tile(move_pos);
 
             // Move there by setting the tiles directly.
             // TODO method here to respect en passant and castling.
@@ -99,11 +119,7 @@ impl Game {
             // This move resulted in a state of check. It is not a legal move.
 
             // Undo the move.
-            if let Some(old_square) = old_square {
-                self.board.set_tile(move_pos, old_square);
-            } else {
-                self.board.remove_tile(move_pos);
-            }
+            self.board.set_or_remove_tile(move_pos, old_tile);
             self.board.set_tile(pos, tile);
 
             !check
@@ -126,22 +142,18 @@ impl Game {
     /// Note that this method will not validate the turn of the piece and will not
     /// validate whether the piece can be moved into a state of check.
     /// 
+    /// If the `include_castling` parameter is `true`, castling will also be checked
+    /// and added to the moveset when applicable.
+    /// 
     /// ## Panics
     /// This function will panic if there is no piece at the tile.
-    pub fn get_pseudo_legal_moves(&self, pos: &BoardPos) -> HashSet<BoardPos> {
+    pub(super) fn get_pseudo_legal_moves(&self, pos: &BoardPos, include_castling: bool) -> HashSet<BoardPos> {
         let tile = self.board.get_tile(pos)
             .expect("Attempt to get pseudo-legal moves from empty tile.");
 
         let mut moveset = HashSet::new();
 
         match tile.piece() {
-            PieceType::King => {
-                self.try_moves_once(&mut moveset, &pos, &tile.color(), [
-                    (-1,  1), (0,  1), (1,  1),
-                    (-1,  0), /******/ (1,  0),
-                    (-1, -1), (0, -1), (1, -1),
-                ]);
-            }
             PieceType::Queen => {
                 self.try_moves_multiple(&mut moveset, &pos, &tile.color(), [
                     (-1,  1), (0,  1), (1,  1),
@@ -170,6 +182,33 @@ impl Game {
                     (-2,  1), (-2, -1),
                 ]);
             },
+            PieceType::King => {
+                self.try_moves_once(&mut moveset, &pos, &tile.color(), [
+                    (-1,  1), (0,  1), (1,  1),
+                    (-1,  0), /******/ (1,  0),
+                    (-1, -1), (0, -1), (1, -1),
+                ]);
+
+                // Castling
+
+                let castling_availability = match tile.color() {
+                    Color::White => &self.white_castling,
+                    Color::Black => &self.black_castling,
+                };
+
+                if include_castling
+                    && (castling_availability.kingside || castling_availability.queenside)
+                    && !self.is_check(&tile.color()) {
+                    // Castling is not possible if the king is in check.
+
+                    if castling_availability.kingside {
+                        self.try_castling(&pos, &tile.color(), &mut moveset, 1);
+                    }
+                    if castling_availability.queenside {
+                        self.try_castling(&pos, &tile.color(), &mut moveset, -1);
+                    }
+                }
+            }
             PieceType::Pawn => {
                 // Calculate the forward direction for this team.
                 let dir: i8 = if tile.color() == Color::White { 1 } else { -1 };
@@ -318,12 +357,63 @@ impl Game {
             }
         }
     }
+
+    /// Test castling in the specified direction, and if castling is possible, add
+    /// the position where the king will result after castling to the moveset.
+    fn try_castling(&self, start: &BoardPos, color: &Color, moveset: &mut HashSet<BoardPos>, dir: i8) {
+        // The tile that the king will cross over while castling.
+        let cross_over_pos = start.offset(dir, 0);
+        let cross_over_pos = match cross_over_pos {
+            Some(p) => p,
+            None => return
+        };
+
+        let enemy_color = color.opposite();
+
+        if self.is_attacked_by(&cross_over_pos, &enemy_color) {
+            // If the enemy can attack the position being crossed over, castling is not legal.
+            return;
+        }
+
+        // The position the king would end up at if the castling is performed.
+        let king_pos = cross_over_pos.offset(dir, 0);
+        let king_pos = match king_pos {
+            Some(p) => p,
+            None => return
+        };
+
+        let rook = self.find_rook(&king_pos, color, dir);
+        if rook.is_some() {
+            // A rook was found and there were no pieces between. Castling is possible.
+            moveset.insert(king_pos);
+        }
+    }
+
+    fn find_rook(&self, start: &BoardPos, color: &Color, dir: i8) -> Option<BoardPos> {
+        // Traverse until we find a rook
+        let mut pos = (*start).clone();
+        loop {
+            let tile = self.board.get_tile(&pos);
+            if let Some(tile) = tile {
+                if tile.color() != *color || tile.piece() != PieceType::Rook {
+                    return None;
+                }
+                return Some(pos);
+            }
+
+            // A vacant slot, let's keep searching for a rook.
+            pos = match pos.offset(dir, 0) {
+                None => return None,
+                Some(new_pos) => new_pos,
+            };
+        }
+    }
 }
 
 
 #[cfg(test)]
 mod tests {
-    use crate::{board::{Tile, Board}, piece::PieceType};
+    use crate::{board::{Tile, Board}, piece::PieceType, game::CastlingAvailability};
     use super::*;
 
     #[test]
@@ -355,7 +445,9 @@ mod tests {
 
         Game {
             board,
-            current_turn: COLOR
+            current_turn: COLOR,
+            white_castling: CastlingAvailability { kingside: false, queenside: false },
+            black_castling: CastlingAvailability { kingside: false, queenside: false },
         }
     }
 
@@ -483,5 +575,30 @@ mod tests {
         // It is not legal to move the rook so that it unblocks the black rook's
         // attacking path to the white king, which would result in a state of check.
         assert_moves(&moves, "e7 e6 e5 e3");
+    }
+
+    #[test]
+    fn castling_possible() {
+        let mut game = Game::from_fen("r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1").unwrap();
+        let white_king_pos = "e1".parse().unwrap();
+        let black_king_pos = "e8".parse().unwrap();
+
+        let white_moves = game.get_legal_moves(&white_king_pos).unwrap();
+        game.current_turn = Color::Black;
+        let black_moves = game.get_legal_moves(&black_king_pos).unwrap();
+
+        assert_moves(&white_moves, "c1 d1 d2 e2 f2 f1 g1");
+        assert_moves(&black_moves, "c8 d8 d7 e7 f7 f8 g8");
+    }
+
+    #[test]
+    fn castling() {
+        let mut game = Game::from_fen("r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1").unwrap();
+
+        game.move_piece(&"e1".parse().unwrap(),& "g1".parse().unwrap()).unwrap();
+        game.move_piece(&"e8".parse().unwrap(),& "c8".parse().unwrap()).unwrap();
+
+        assert_eq!(game.to_fen(), "2kr3r/8/8/8/8/8/8/R4RK1 w - - 0 0");
+        // assert_eq!(game.to_fen(), "2kr3r/8/8/8/8/8/8/R4RK1 w - - 0 1"); TODO halfmove counter
     }
 }
