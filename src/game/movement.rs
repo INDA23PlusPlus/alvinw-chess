@@ -37,7 +37,7 @@ impl Game {
     // Movement
 
     pub fn move_piece(&mut self, from: &BoardPos, to: &BoardPos) -> Result<(), MovePieceError> {
-        let moveset = match self.get_moveset(from) {
+        let moveset = match self.get_legal_moves(from) {
             Ok(moveset) => moveset,
             Err(GetMovesetError::NoTile) => return Err(MovePieceError::NoTile),
             Err(GetMovesetError::NotCurrentTurn) => return Err(MovePieceError::NotCurrentTurn),
@@ -50,15 +50,31 @@ impl Game {
         let tile = self.board.remove_tile(from).expect("Move is already validated.");
         self.board.set_tile(to, tile);
 
-        self.current_turn = match self.current_turn {
-            Color::White => Color::Black,
-            Color::Black => Color:: White,
-        };
+        self.current_turn = self.current_turn.opposite();
         
         Ok(())
     }
 
-    pub fn get_moveset(&self, pos: &BoardPos) -> Result<HashSet<BoardPos>, GetMovesetError> {
+    /// Get the legal moves for a piece.
+    ///
+    /// Legal moves are defined as moves that:
+    /// 1. follow the movement rules for the piece. Eg. a bishop can only walk
+    ///    diagonally.
+    /// 2. respect the environment. Eg. not jumping over pieces unless the piece
+    ///    allows that.
+    /// 3. do not move outside of the board.
+    /// 4. do not move into a state of check.
+    /// 
+    /// This method will ensure there is a tile at the position, otherwise the
+    /// `NoTile` error variant is returned.
+    /// 
+    /// This method will ensure that it is the correct turn. In other words, if the
+    /// current turn is white, only white piece's moves can be gotten with this
+    /// method. Otherwise the `NotCurrentTurn` error variant is returned.
+    /// 
+    /// ## Castling and en passant
+    /// Not implemented yet!
+    pub fn get_legal_moves(&mut self, pos: &BoardPos) -> Result<HashSet<BoardPos>, GetMovesetError> {
         let tile = self.board.get_tile(pos)
             .ok_or(GetMovesetError::NoTile)?;
 
@@ -66,38 +82,88 @@ impl Game {
             return Err(GetMovesetError::NotCurrentTurn);
         }
 
+        let mut moveset = self.get_pseudo_legal_moves(pos);
+        moveset.retain(|move_pos| {
+            // Ensure the move does not move into a state of check.
+            // Attempt the move.
+
+            // Save tile on square.
+            let old_square = self.board.get_tile(move_pos);
+
+            // Move there by setting the tiles directly.
+            // TODO method here to respect en passant and castling.
+            self.board.set_tile(move_pos, tile);
+            self.board.remove_tile(pos);
+
+            let check = self.is_check(&tile.color());
+            // This move resulted in a state of check. It is not a legal move.
+
+            // Undo the move.
+            if let Some(old_square) = old_square {
+                self.board.set_tile(move_pos, old_square);
+            } else {
+                self.board.remove_tile(move_pos);
+            }
+            self.board.set_tile(pos, tile);
+
+            !check
+        });
+        Ok(moveset)
+    }
+
+    /// Get the pseudo legal moves for a tile.
+    /// 
+    /// Users of this library are recomended to use the `get_legal_moves` method
+    /// instead.
+    /// 
+    /// Psuedo legal moves are concidered moves that:
+    /// 1. follow the movement rules for the piece. Eg. a bishop can only walk
+    ///    diagonally.
+    /// 2. respect the environment. Eg. not jumping over pieces unless the piece
+    ///    allows that.
+    /// 3. do not move outside of the board.
+    /// 
+    /// Note that this method will not validate the turn of the piece and will not
+    /// validate whether the piece can be moved into a state of check.
+    /// 
+    /// ## Panics
+    /// This function will panic if there is no piece at the tile.
+    pub fn get_pseudo_legal_moves(&self, pos: &BoardPos) -> HashSet<BoardPos> {
+        let tile = self.board.get_tile(pos)
+            .expect("Attempt to get pseudo-legal moves from empty tile.");
+
         let mut moveset = HashSet::new();
 
         match tile.piece() {
             PieceType::King => {
-                self.try_moves_once(&mut moveset, &pos, [
+                self.try_moves_once(&mut moveset, &pos, &tile.color(), [
                     (-1,  1), (0,  1), (1,  1),
                     (-1,  0), /******/ (1,  0),
                     (-1, -1), (0, -1), (1, -1),
                 ]);
             }
             PieceType::Queen => {
-                self.try_moves_multiple(&mut moveset, &pos, [
+                self.try_moves_multiple(&mut moveset, &pos, &tile.color(), [
                     (-1,  1), (0,  1), (1,  1),
                     (-1,  0), /******/ (1,  0),
                     (-1, -1), (0, -1), (1, -1),
                 ]);
             },
             PieceType::Rook => {
-                self.try_moves_multiple(&mut moveset, &pos, [
+                self.try_moves_multiple(&mut moveset, &pos, &tile.color(), [
                               (0,  1),
                     (-1,  0), /******/ (1,  0),
                               (0, -1),
                 ]);
             },
             PieceType::Bishop => {
-                self.try_moves_multiple(&mut moveset, &pos, [
+                self.try_moves_multiple(&mut moveset, &pos, &tile.color(), [
                     (-1,  1), (1,  1),
                     (-1, -1), (1, -1),
                 ]);
             },
             PieceType::Knight => {
-                self.try_moves_once(&mut moveset, &pos, [
+                self.try_moves_once(&mut moveset, &pos, &tile.color(), [
                     (-1,  2), (1,   2),
                     (2,   1), (2,  -1),
                     (-1, -2), (1,  -2),
@@ -117,7 +183,7 @@ impl Game {
 
                 // Moving forward one tile is always possible (assuming it is valid in other
                 // regards).
-                self.try_moves_once(&mut moveset, &pos, [
+                self.try_moves_once(&mut moveset, &pos, &tile.color(), [
                     (0, dir)
                 ]);
 
@@ -130,19 +196,19 @@ impl Game {
 
                     // ...there is no piece, regardless of color, one tile forward.
                     if piece_one_forward.is_none() {
-                        self.try_moves_once(&mut moveset, &pos, [
+                        self.try_moves_once(&mut moveset, &pos, &tile.color(), [
                             (0, 2 * dir)
                         ]);
                     }
                 }
 
                 // Diagonal moves are only possible when attacking.
-                self.try_attacking_move(&mut moveset, &pos, -1, dir);
-                self.try_attacking_move(&mut moveset, &pos, 1, dir);
+                self.try_attacking_move(&mut moveset, &pos, &tile.color(), -1, dir);
+                self.try_attacking_move(&mut moveset, &pos, &tile.color(), 1, dir);
             },
         }
 
-        Ok(moveset)
+        moveset
     }
 
     /// Test the specified delta position moves and add the valid moves to the
@@ -150,10 +216,11 @@ impl Game {
     fn try_moves_once<const COUNT: usize>(&self,
         moveset: &mut HashSet<BoardPos>,
         start: &BoardPos,
+        friendly_color: &Color,
         delta_positions: [(i8, i8); COUNT]
     ) {
         for (delta_file, delta_rank) in delta_positions {
-            let option_move = self.try_move_once(&start, delta_file, delta_rank);
+            let option_move = self.try_move_once(&start, delta_file, delta_rank, friendly_color);
 
             if let Some((pos, _move_type)) = option_move {
                 moveset.insert(pos);
@@ -165,7 +232,8 @@ impl Game {
     fn try_move_once(&self,
         start: &BoardPos,
         delta_file: i8,
-        delta_rank: i8
+        delta_rank: i8,
+        friendly_color: &Color
     ) -> Option<(BoardPos, MoveType)> {
         let pos = start.offset(delta_file, delta_rank);
         let pos = match pos {
@@ -179,7 +247,7 @@ impl Game {
             None => return Some((pos, MoveType::ToEmpty)), // No tile at the position means we can move there
         };
 
-        if tile.color() == self.current_turn {
+        if tile.color() == *friendly_color {
             // A friendly piece is in the way.
             return None;
         }
@@ -194,10 +262,11 @@ impl Game {
     fn try_attacking_move(&self,
         moveset: &mut HashSet<BoardPos>,
         start: &BoardPos,
+        friendly_color: &Color,
         delta_file: i8,
-        delta_rank: i8
+        delta_rank: i8,
     ) {
-        let option_move = self.try_move_once(start, delta_file, delta_rank);
+        let option_move = self.try_move_once(start, delta_file, delta_rank, friendly_color);
         if let Some((pos, move_type)) = option_move {
             match move_type {
                 MoveType::ToEmpty => {},
@@ -216,10 +285,11 @@ impl Game {
     fn try_moves_multiple<const COUNT: usize>(&self,
         moveset: &mut HashSet<BoardPos>,
         start: &BoardPos,
+        friendly_color: &Color,
         vectors: [(i8, i8); COUNT]
     ) {
         for (delta_file, delta_rank) in vectors {
-            self.try_move_multiple(moveset, start, delta_file, delta_rank);
+            self.try_move_multiple(moveset, start, friendly_color, delta_file, delta_rank);
         }
     }
 
@@ -227,12 +297,13 @@ impl Game {
     fn try_move_multiple(&self,
         moveset: &mut HashSet<BoardPos>,
         start: &BoardPos,
+        friendly_color: &Color,
         delta_file: i8,
         delta_rank: i8
     ) {
         let mut pos = (*start).clone();
         loop {
-            let new_pos = self.try_move_once(&pos, delta_file, delta_rank);
+            let new_pos = self.try_move_once(&pos, delta_file, delta_rank, friendly_color);
             let new_move = match new_pos {
                 None => break,
                 Some(new_move) => new_move,
@@ -337,17 +408,19 @@ mod tests {
         );
     }
 
+    // Movement tests
+
     #[test]
     fn king_moves() {
-        let (game, pos) = prepare_moveset_test(PieceType::King);
-        let actual = game.get_moveset(&pos).unwrap();
+        let (mut game, pos) = prepare_moveset_test(PieceType::King);
+        let actual = game.get_legal_moves(&pos).unwrap();
         assert_moves(&actual, "d5 e5 f5 d4 f4 d3 e3 f3");
     }
 
     #[test]
     fn queen_moves() {
-        let (game, pos) = prepare_moveset_test(PieceType::Queen);
-        let actual = game.get_moveset(&pos).unwrap();
+        let (mut game, pos) = prepare_moveset_test(PieceType::Queen);
+        let actual = game.get_legal_moves(&pos).unwrap();
         assert_moves_exist(&actual, "f5 f4 h7 b4");
         assert_moves_dont_exist(&actual, "e4 d2 f6");
     }
@@ -360,30 +433,30 @@ mod tests {
         let enemy = Tile::new(PieceType::Pawn, Color::Black);
         game.board.set_tile(&pos2, enemy);
 
-        let actual = game.get_moveset(&pos).unwrap();
+        let actual = game.get_legal_moves(&pos).unwrap();
         assert_moves_exist(&actual, "d4 c4 e5 e7 h4 e3");
         assert_moves_dont_exist(&actual, "e4 f5 d2 d7 b4 a4");
     }
 
     #[test]
     fn knight_moves() {
-        let (game, pos) = prepare_moveset_test(PieceType::Knight);
-        let actual = game.get_moveset(&pos).unwrap();
+        let (mut game, pos) = prepare_moveset_test(PieceType::Knight);
+        let actual = game.get_legal_moves(&pos).unwrap();
         assert_moves(&actual, "d6 f6 g5 g3 f2 d2 c3 c5");
     }
 
     #[test]
     fn first_pawn_moves() {
         let pos = "e2".parse().unwrap();
-        let game = prepare_moveset_test_at(PieceType::Pawn, &pos);
-        let actual = game.get_moveset(&pos).unwrap();
+        let mut game = prepare_moveset_test_at(PieceType::Pawn, &pos);
+        let actual = game.get_legal_moves(&pos).unwrap();
         assert_moves(&actual, "e3 e4");
     }
 
     #[test]
     fn moved_pawn_moves() {
-        let (game, pos) = prepare_moveset_test(PieceType::Pawn);
-        let actual = game.get_moveset(&pos).unwrap();
+        let (mut game, pos) = prepare_moveset_test(PieceType::Pawn);
+        let actual = game.get_legal_moves(&pos).unwrap();
         assert_moves(&actual, "e5");
     }
 
@@ -394,7 +467,21 @@ mod tests {
         let enemy = Tile::new(PieceType::Pawn, Color::Black);
         game.board.set_tile(&"d5".parse().unwrap(), enemy);
         
-        let actual = game.get_moveset(&pos).unwrap();
+        let actual = game.get_legal_moves(&pos).unwrap();
         assert_moves(&actual, "d5 e5");
+    }
+
+    // Movement tests including check
+
+    #[test]
+    fn valid_moves_not_state_of_check() {
+        let pos = "e4".parse().unwrap();
+        let mut game = Game::from_fen("k7/4r3/8/8/4R3/8/4K3/8 w - - 0 1").unwrap();
+
+        let moves = game.get_legal_moves(&pos).unwrap();
+
+        // It is not legal to move the rook so that it unblocks the black rook's
+        // attacking path to the white king, which would result in a state of check.
+        assert_moves(&moves, "e7 e6 e5 e3");
     }
 }
