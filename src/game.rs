@@ -1,4 +1,4 @@
-use crate::board::{Board, Color};
+use crate::{board::{Board, Color}, pos::BoardPos};
 
 mod fen;
 pub use fen::FenParseError;
@@ -16,6 +16,7 @@ pub struct Game {
     current_turn: Color,
     white_castling: CastlingAvailability,
     black_castling: CastlingAvailability,
+    en_passant_target: Option<BoardPos>,
 }
 
 impl Game {

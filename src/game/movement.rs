@@ -69,6 +69,72 @@ impl Game {
             self.board.set_tile(to, tile);
         }
 
+        // En passant
+        if tile.piece() == PieceType::Pawn
+            && self.en_passant_target.as_ref().is_some_and(|en_passant_target| en_passant_target == to) {
+            // A pawn just performed en passant.
+            // We need to capture the pawn being taken en passant.
+            // That pawn will be placed on the same file as the "to" position, and the same
+            // rank as the "from" position.
+            let attacked_pawn_pos = BoardPos::new(to.file(), from.rank());
+            let attacked_pawn = self.board.remove_tile(&attacked_pawn_pos);
+
+            // The following panic! statements should never be called but exist for
+            // validating purposes.
+            // The get_legal_moves function will only allow an en passant situation when it
+            // is valid, so we are already know the situation is a valid en passant.
+            match attacked_pawn {
+                None => panic!("En passant occured but there was no pawn to attack."),
+                Some(attacked_pawn) => {
+                    if attacked_pawn.piece() != PieceType::Pawn || attacked_pawn.color() == tile.color() {
+                        panic!("Did not attack an enemy pawn.");
+                    }
+                }
+            }
+        }
+
+        // Clear any potensial previous en passant squares as en passant is only valid
+        // if the pawn moved directly before the en passant attack occurs.
+        self.en_passant_target = None;
+
+        // Check for new en passant possibilities
+        if tile.piece() == PieceType::Pawn && from.rank().abs_diff(to.rank()) == 2 {
+            // A pawn moved two steps. Record the en passant target position for the passed
+            // square.
+            let dir = if to.rank() > from.rank() { 1 } else { -1 };
+            let rank = from.rank() as i8 + dir;
+            if rank >= 0 {
+                self.en_passant_target = Some(BoardPos::new(from.file(), rank as u8));
+            }
+        }
+
+        // Remove castling availability when moving the king.
+        if tile.piece() == PieceType::King {
+            let castling_availability = match tile.color() {
+                Color::White => &mut self.white_castling,
+                Color::Black => &mut self.black_castling,
+            };
+            castling_availability.kingside = false;
+            castling_availability.queenside = false;
+        }
+
+        // Remove castling availability when moving rooks.
+        if tile.piece() == PieceType::Rook {
+            // Check if the rooks are moving away from their starting positions.
+            let starting_rank = if tile.color() == Color::White { 0 } else { 7 };
+            if from.rank() == starting_rank {
+                let castling_availability = match tile.color() {
+                    Color::White => &mut self.white_castling,
+                    Color::Black => &mut self.black_castling,
+                };
+                if from.file() == 0 {
+                    castling_availability.queenside = false;
+                }
+                if from.file() == 7 {
+                    castling_availability.kingside = false;
+                }
+            }
+        }
 
         self.current_turn = self.current_turn.opposite();
         
@@ -244,6 +310,24 @@ impl Game {
                 // Diagonal moves are only possible when attacking.
                 self.try_attacking_move(&mut moveset, &pos, &tile.color(), -1, dir);
                 self.try_attacking_move(&mut moveset, &pos, &tile.color(), 1, dir);
+
+                // En passant
+                if let Some(en_passant_target) = &self.en_passant_target {
+                    if en_passant_target.rank() as i8 == pos.rank() as i8 + dir && en_passant_target.file().abs_diff(pos.file()) == 1 {
+                        // There is an en passant target square forward-diagonally to this pawn.
+
+                        // The position of the pawn that will be attacked by this en passant.
+                        let attacked_pawn_pos = BoardPos::new(en_passant_target.file(), pos.rank());
+
+                        let attacked_pawn = self.board.get_tile(&attacked_pawn_pos);
+                        if let Some(attacked_pawn) = attacked_pawn {
+                            if attacked_pawn.piece() == PieceType::Pawn && attacked_pawn.color() != tile.color() {
+                                // There is an enemy pawn at the location. En passant is possible.
+                                moveset.insert(en_passant_target.clone());
+                            }                            
+                        }
+                    }
+                }
             },
         }
 
@@ -421,8 +505,8 @@ mod tests {
         let mut game = Game::new();
         game.move_piece(&"e2".parse().unwrap(), &"e4".parse().unwrap()).unwrap();
         // assert_eq!("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1", game.to_fen());
-        // Castling and en passant not yet implemented
-        assert_eq!("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b - - 0 0", game.to_fen());
+        // TODO counters
+        assert_eq!("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 0", game.to_fen());
     }
 
     /// Prepare a game for a moveset test.
@@ -448,6 +532,7 @@ mod tests {
             current_turn: COLOR,
             white_castling: CastlingAvailability { kingside: false, queenside: false },
             black_castling: CastlingAvailability { kingside: false, queenside: false },
+            en_passant_target: None,
         }
     }
 
@@ -592,13 +677,39 @@ mod tests {
     }
 
     #[test]
+    fn castling_not_possible() {
+        let mut game = Game::new();
+
+        game.move_piece(&"a2".parse().unwrap(), &"a3".parse().unwrap()).unwrap();
+        game.move_piece(&"h7".parse().unwrap(), &"h6".parse().unwrap()).unwrap();
+        game.move_piece(&"a1".parse().unwrap(), &"a2".parse().unwrap()).unwrap();
+        game.move_piece(&"h8".parse().unwrap(), &"h7".parse().unwrap()).unwrap();
+
+        assert_eq!(game.to_fen(), "rnbqkbn1/pppppppr/7p/8/8/P7/RPPPPPPP/1NBQKBNR w Kq - 0 0");
+    }
+
+    #[test]
     fn castling() {
         let mut game = Game::from_fen("r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1").unwrap();
 
-        game.move_piece(&"e1".parse().unwrap(),& "g1".parse().unwrap()).unwrap();
-        game.move_piece(&"e8".parse().unwrap(),& "c8".parse().unwrap()).unwrap();
+        game.move_piece(&"e1".parse().unwrap(), & "g1".parse().unwrap()).unwrap();
+        game.move_piece(&"e8".parse().unwrap(), & "c8".parse().unwrap()).unwrap();
 
         assert_eq!(game.to_fen(), "2kr3r/8/8/8/8/8/8/R4RK1 w - - 0 0");
         // assert_eq!(game.to_fen(), "2kr3r/8/8/8/8/8/8/R4RK1 w - - 0 1"); TODO halfmove counter
+    }
+
+    #[test]
+    fn en_passant() {
+        let mut game = Game::from_fen("4k3/8/8/8/2p5/8/1P6/4K3 w - - 0 1").unwrap();
+
+        game.move_piece(&"b2".parse().unwrap(), &"b4".parse().unwrap()).unwrap();
+
+        let moves = game.get_legal_moves(&"c4".parse().unwrap()).unwrap();
+        assert_moves(&moves, "c3 b3");
+
+        game.move_piece(&"c4".parse().unwrap(), &"b3".parse().unwrap()).unwrap();
+
+        assert_eq!(game.to_fen(), "4k3/8/8/8/8/1p6/8/4K3 w - - 0 0");
     }
 }

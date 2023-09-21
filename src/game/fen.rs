@@ -1,4 +1,4 @@
-use crate::board::{Board, Color};
+use crate::{board::{Board, Color}, pos::ParseBoardPosError};
 
 use super::{Game, CastlingAvailability};
 
@@ -9,6 +9,7 @@ pub enum FenParseError<'a> {
     InvalidPiece(char),
     TooShort,
     InvalidTurn(&'a str),
+    InvalidEnPassantTarget(ParseBoardPosError),
 }
 
 impl Game {
@@ -37,11 +38,21 @@ impl Game {
             queenside: castling_availability.contains('q'),
         };
 
-        let _en_passant = iter.next().ok_or(FenParseError::TooShort)?;
+        let en_passant = iter.next().ok_or(FenParseError::TooShort)?;
+
+        let en_passant_target = if en_passant == "-" {
+            None
+        } else {
+            Some(
+                en_passant.parse()
+                    .map_err(|err| FenParseError::InvalidEnPassantTarget(err))?
+            )
+        };
+
         let _halfmove_clock = iter.next().ok_or(FenParseError::TooShort)?;
         let _fullmove_number = iter.next().ok_or(FenParseError::TooShort)?;
 
-        Ok(Self { board, current_turn, white_castling, black_castling })
+        Ok(Self { board, current_turn, white_castling, black_castling, en_passant_target })
     }
 
     pub fn to_fen(&self) -> String {
@@ -49,7 +60,24 @@ impl Game {
         str.push_str(&self.board.to_fen_placement_data());
         str.push(' ');
         str.push(if self.current_turn == Color::White { 'w' } else { 'b' });
-        str.push_str(" - - 0 0"); // Castling, En passant TODO
+        str.push(' ');
+        let len1 = str.len();
+        if self.white_castling.kingside { str.push('K') }
+        if self.white_castling.queenside { str.push('Q') }
+        if self.black_castling.kingside { str.push('k') }
+        if self.black_castling.queenside { str.push('q') }
+        if str.len() == len1 {
+            // No castling
+            str.push('-');
+        }
+        str.push(' ');
+        if let Some(en_passant_target) = &self.en_passant_target {
+            str.push_str(&en_passant_target.to_string());
+        } else {
+            str.push('-');
+        }
+        str.push(' ');
+        str.push_str("0 0"); // TODO clocks
         str
     }
 
