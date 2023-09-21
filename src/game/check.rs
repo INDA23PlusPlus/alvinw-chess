@@ -59,7 +59,7 @@ impl Game {
         return None;
     }
 
-    fn is_checkmate(&mut self, color: &Color) -> bool {
+    pub(super) fn is_checkmate(&mut self, color: &Color) -> bool {
         if !self.is_check(color) {
             return false;
         }

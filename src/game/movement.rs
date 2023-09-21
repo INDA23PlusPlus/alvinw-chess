@@ -19,7 +19,7 @@ pub enum GetMovesetError {
     /// The piece was of the opposing color.
     /// 
     /// This error is returned when `get_moveset` is called on a piece that is of the
-    /// color that is not the current turn. TODO reformat sentence
+    /// color that is not the current turn.
     NotCurrentTurn,
 }
 
@@ -34,6 +34,7 @@ enum MoveType {
 
 struct PerformedMove {
     changed_tiles: Vec<(BoardPos, Option<Tile>)>,
+    had_capture: bool,
 }
 
 impl Game {
@@ -51,7 +52,12 @@ impl Game {
 
         let tile = self.board.get_tile(from).expect("Move is already validated.");
 
-        self.perform_move(from, to);
+        let performed_move = self.perform_move(from, to);
+
+        self.halfmove_clock += 1;
+        if performed_move.had_capture {
+            self.halfmove_clock = 0;
+        }
 
         // Clear any potensial previous en passant squares as en passant is only valid
         // if the pawn moved directly before the en passant attack occurs.
@@ -96,6 +102,16 @@ impl Game {
             }
         }
 
+        // Check if promotion is required
+        let last_rank = if tile.color() == Color::White { 7 } else { 0 };
+        if to.rank() == last_rank && tile.piece() == PieceType::Pawn {
+            self.promotion_required = Some(to.clone());
+        }
+
+        if self.current_turn == Color::Black {
+            self.fullmove_number += 1;
+        }
+
         self.current_turn = self.current_turn.opposite();
         
         Ok(())
@@ -123,14 +139,19 @@ impl Game {
         let tile = self.board.get_tile(from).expect("Move is already validated.");
 
         let mut performed_move = PerformedMove {
-            changed_tiles: Vec::with_capacity(3)
+            changed_tiles: Vec::with_capacity(3),
+            had_capture: false,
         };
         
         // Record the tile before it is moved.
         performed_move.changed_tiles.push((from.clone(), Some(tile)));
 
         // Record the tile currently at the position we are about to move to.
-        self.record_tile(to, &mut performed_move);
+        let to_tile = self.board.get_tile(to);
+        performed_move.changed_tiles.push((to.clone(), to_tile));
+        if to_tile.is_some() {
+            performed_move.had_capture = true;
+        }
 
         // Castling
         if tile.piece() == PieceType::King && from.file().abs_diff(to.file()) == 2 {
@@ -180,7 +201,8 @@ impl Game {
                     if attacked_pawn.piece() != PieceType::Pawn || attacked_pawn.color() == tile.color() {
                         panic!("Did not attack an enemy pawn.");
                     }
-                    performed_move.changed_tiles.push((attacked_pawn_pos, Some(attacked_pawn)))
+                    performed_move.had_capture = true;
+                    performed_move.changed_tiles.push((attacked_pawn_pos, Some(attacked_pawn)));
                 }
             }
         }
@@ -557,9 +579,7 @@ mod tests {
     fn move_piece() {
         let mut game = Game::new();
         game.move_piece(&"e2".parse().unwrap(), &"e4".parse().unwrap()).unwrap();
-        // assert_eq!("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1", game.to_fen());
-        // TODO counters
-        assert_eq!("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 0", game.to_fen());
+        assert_eq!("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 1 1", game.to_fen());
     }
 
     /// Prepare a game for a moveset test.
@@ -586,6 +606,9 @@ mod tests {
             white_castling: CastlingAvailability { kingside: false, queenside: false },
             black_castling: CastlingAvailability { kingside: false, queenside: false },
             en_passant_target: None,
+            promotion_required: None,
+            halfmove_clock: 0,
+            fullmove_number: 0,
         }
     }
 
@@ -738,7 +761,7 @@ mod tests {
         game.move_piece(&"a1".parse().unwrap(), &"a2".parse().unwrap()).unwrap();
         game.move_piece(&"h8".parse().unwrap(), &"h7".parse().unwrap()).unwrap();
 
-        assert_eq!(game.to_fen(), "rnbqkbn1/pppppppr/7p/8/8/P7/RPPPPPPP/1NBQKBNR w Kq - 0 0");
+        assert_eq!(game.to_fen(), "rnbqkbn1/pppppppr/7p/8/8/P7/RPPPPPPP/1NBQKBNR w Kq - 4 3");
     }
 
     #[test]
@@ -748,8 +771,7 @@ mod tests {
         game.move_piece(&"e1".parse().unwrap(), & "g1".parse().unwrap()).unwrap();
         game.move_piece(&"e8".parse().unwrap(), & "c8".parse().unwrap()).unwrap();
 
-        assert_eq!(game.to_fen(), "2kr3r/8/8/8/8/8/8/R4RK1 w - - 0 0");
-        // assert_eq!(game.to_fen(), "2kr3r/8/8/8/8/8/8/R4RK1 w - - 0 1"); TODO halfmove counter
+        assert_eq!(game.to_fen(), "2kr3r/8/8/8/8/8/8/R4RK1 w - - 2 2");
     }
 
     #[test]
@@ -763,7 +785,7 @@ mod tests {
 
         game.move_piece(&"c4".parse().unwrap(), &"b3".parse().unwrap()).unwrap();
 
-        assert_eq!(game.to_fen(), "4k3/8/8/8/8/1p6/8/4K3 w - - 0 0");
+        assert_eq!(game.to_fen(), "4k3/8/8/8/8/1p6/8/4K3 w - - 0 2");
     }
 
     #[test]
@@ -785,7 +807,7 @@ mod tests {
         let performed_move = game.perform_move(&"e1".parse().unwrap(), &"c1".parse().unwrap());
         game.undo_performed_move(performed_move);
 
-        assert_eq!(game.to_fen(), "r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 0");
+        assert_eq!(game.to_fen(), "r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1");
     }
 
     #[test]
@@ -795,6 +817,25 @@ mod tests {
         let performed_move = game.perform_move(&"c5".parse().unwrap(), &"b6".parse().unwrap());
         game.undo_performed_move(performed_move);
 
-        assert_eq!(game.to_fen(), "4k3/8/8/1pP5/8/8/8/4K3 w - b6 0 0");
+        assert_eq!(game.to_fen(), "4k3/8/8/1pP5/8/8/8/4K3 w - b6 0 1");
+    }
+
+    #[test]
+    fn check_must_move_to_non_check() {
+        let mut game = Game::from_fen("4k3/8/8/8/2b5/8/3PK2P/8 w - - 0 1").unwrap();
+
+        assert!(game.is_check(&Color::White));
+
+        // When there is check, only moves that make the game exit check are legal.
+
+        let moves1 = game.get_legal_moves(&"d2".parse().unwrap()).unwrap();
+        assert_moves(&moves1, "d3");
+
+        let moves2 = game.get_legal_moves(&"e2".parse().unwrap()).unwrap();
+        assert_moves(&moves2, "e3 f3 f2 e1 d1");
+
+        // Moving this pawn is usually legal, but it does not help the check situation.
+        let moves3 = game.get_legal_moves(&"h2".parse().unwrap()).unwrap();
+        assert_moves(&moves3, "");
     }
 }

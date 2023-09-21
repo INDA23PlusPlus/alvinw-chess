@@ -10,6 +10,7 @@ pub enum FenParseError<'a> {
     TooShort,
     InvalidTurn(&'a str),
     InvalidEnPassantTarget(ParseBoardPosError),
+    InvalidClockInteger,
 }
 
 impl Game {
@@ -49,10 +50,25 @@ impl Game {
             )
         };
 
-        let _halfmove_clock = iter.next().ok_or(FenParseError::TooShort)?;
-        let _fullmove_number = iter.next().ok_or(FenParseError::TooShort)?;
+        let halfmove_clock = iter.next()
+            .ok_or(FenParseError::TooShort)?
+            .parse()
+            .ok().ok_or(FenParseError::InvalidClockInteger)?;
+        let fullmove_number = iter.next()
+            .ok_or(FenParseError::TooShort)?
+            .parse()
+            .ok().ok_or(FenParseError::InvalidClockInteger)?;
 
-        Ok(Self { board, current_turn, white_castling, black_castling, en_passant_target })
+        Ok(Self {
+            board,
+            current_turn,
+            white_castling,
+            black_castling,
+            en_passant_target,
+            promotion_required: None,
+            halfmove_clock,
+            fullmove_number
+        })
     }
 
     pub fn to_fen(&self) -> String {
@@ -77,7 +93,9 @@ impl Game {
             str.push('-');
         }
         str.push(' ');
-        str.push_str("0 0"); // TODO clocks
+        str.push_str(&self.halfmove_clock.to_string());
+        str.push(' ');
+        str.push_str(&self.fullmove_number.to_string());
         str
     }
 
