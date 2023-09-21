@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use crate::{pos::BoardPos, board::Color, piece::PieceType};
+use crate::{pos::BoardPos, board::{Color, Tile}, piece::PieceType};
 
 use super::Game;
 
@@ -32,6 +32,10 @@ enum MoveType {
     Attacking
 }
 
+struct PerformedMove {
+    changed_tiles: Vec<(BoardPos, Option<Tile>)>,
+}
+
 impl Game {
 
     pub fn move_piece(&mut self, from: &BoardPos, to: &BoardPos) -> Result<(), MovePieceError> {
@@ -47,51 +51,7 @@ impl Game {
 
         let tile = self.board.get_tile(from).expect("Move is already validated.");
 
-        // Castling
-        if tile.piece() == PieceType::King && from.file().abs_diff(to.file()) == 2 {
-            // The king moved two tiles. This means we are castling.
-            let dir = if to.file() > from.file() { 1 } else { -1 };
-            
-            let new_rook_pos = from.offset(dir, 0)
-                .expect("Move is already validated by get_legal_moves");
-            
-            let rook_pos = self.find_rook(&new_rook_pos, &tile.color(), dir)
-                .expect("Move is already validated by get_legal_moves");
-
-            let rook = self.board.remove_tile(&rook_pos).expect("Rook exists.");
-            self.board.remove_tile(from);
-            self.board.set_tile(to, tile);
-            self.board.set_tile(&new_rook_pos, rook);
-
-        } else {
-            // Normal move
-            self.board.remove_tile(from);
-            self.board.set_tile(to, tile);
-        }
-
-        // En passant
-        if tile.piece() == PieceType::Pawn
-            && self.en_passant_target.as_ref().is_some_and(|en_passant_target| en_passant_target == to) {
-            // A pawn just performed en passant.
-            // We need to capture the pawn being taken en passant.
-            // That pawn will be placed on the same file as the "to" position, and the same
-            // rank as the "from" position.
-            let attacked_pawn_pos = BoardPos::new(to.file(), from.rank());
-            let attacked_pawn = self.board.remove_tile(&attacked_pawn_pos);
-
-            // The following panic! statements should never be called but exist for
-            // validating purposes.
-            // The get_legal_moves function will only allow an en passant situation when it
-            // is valid, so we are already know the situation is a valid en passant.
-            match attacked_pawn {
-                None => panic!("En passant occured but there was no pawn to attack."),
-                Some(attacked_pawn) => {
-                    if attacked_pawn.piece() != PieceType::Pawn || attacked_pawn.color() == tile.color() {
-                        panic!("Did not attack an enemy pawn.");
-                    }
-                }
-            }
-        }
+        self.perform_move(from, to);
 
         // Clear any potensial previous en passant squares as en passant is only valid
         // if the pawn moved directly before the en passant attack occurs.
@@ -141,6 +101,106 @@ impl Game {
         Ok(())
     }
 
+    /// An internal method for performing moves without validating them or affecting
+    /// future gameplay.
+    ///
+    /// It is important that the move being performed is valid, else this method
+    /// will panic.
+    ///
+    /// This method will only move the pieces in accordance to chess rules. In most
+    /// cases this method will move the piece at `from` to the tile at `to`. This
+    /// method will additionally move the rook to perform castling, and capture
+    /// pieces being taken en passant.
+    /// 
+    /// This method does not change the playing team and does not store information
+    /// about changes to castling or en passant as a result of this move.
+    /// 
+    /// Therefore, this method can be used to "preview" a move without affecting
+    /// gameplay, and can easially be reversed by calling `undo_performed_move`
+    /// with the return value of this method.
+    fn perform_move(&mut self, from: &BoardPos, to: &BoardPos) -> PerformedMove {
+
+        let tile = self.board.get_tile(from).expect("Move is already validated.");
+
+        let mut performed_move = PerformedMove {
+            changed_tiles: Vec::with_capacity(3)
+        };
+        
+        // Record the tile before it is moved.
+        performed_move.changed_tiles.push((from.clone(), Some(tile)));
+
+        // Record the tile currently at the position we are about to move to.
+        self.record_tile(to, &mut performed_move);
+
+        // Castling
+        if tile.piece() == PieceType::King && from.file().abs_diff(to.file()) == 2 {
+            // The king moved two tiles. This means we are castling.
+            let dir = if to.file() > from.file() { 1 } else { -1 };
+            
+            let new_rook_pos = from.offset(dir, 0)
+                .expect("Move is already validated by get_legal_moves");
+            
+            let rook_pos = self.find_rook(&new_rook_pos, &tile.color(), dir)
+                .expect("Move is already validated by get_legal_moves");
+
+            let rook = self.board.remove_tile(&rook_pos).expect("Rook exists.");
+
+            // Record tiles before performing the move in case the move
+            // needs to be undone.
+            performed_move.changed_tiles.push((rook_pos, Some(rook)));
+            self.record_tile(&new_rook_pos, &mut performed_move);
+
+            self.board.remove_tile(from);
+            self.board.set_tile(to, tile);
+            self.board.set_tile(&new_rook_pos, rook);
+
+        } else {
+            // Normal move
+            self.board.remove_tile(from);
+            self.board.set_tile(to, tile);
+        }
+
+        // En passant
+        if tile.piece() == PieceType::Pawn
+            && self.en_passant_target.as_ref().is_some_and(|en_passant_target| en_passant_target == to) {
+            // A pawn just performed en passant.
+            // We need to capture the pawn being taken en passant.
+            // That pawn will be placed on the same file as the "to" position, and the same
+            // rank as the "from" position.
+            let attacked_pawn_pos = BoardPos::new(to.file(), from.rank());
+            let attacked_pawn = self.board.remove_tile(&attacked_pawn_pos);
+
+            // The following panic! statements should never be called but exist for
+            // validating purposes.
+            // The get_legal_moves function will only allow an en passant situation when it
+            // is valid, so we are already know the situation is a valid en passant.
+            match attacked_pawn {
+                None => panic!("En passant occured but there was no pawn to attack."),
+                Some(attacked_pawn) => {
+                    if attacked_pawn.piece() != PieceType::Pawn || attacked_pawn.color() == tile.color() {
+                        panic!("Did not attack an enemy pawn.");
+                    }
+                    performed_move.changed_tiles.push((attacked_pawn_pos, Some(attacked_pawn)))
+                }
+            }
+        }
+
+        performed_move
+    }
+
+    fn record_tile(&self, pos: &BoardPos, performed_move: &mut PerformedMove) {
+        let tile = self.board.get_tile(pos);
+        performed_move.changed_tiles.push((pos.clone(), tile));
+    }
+
+    /// Undo a move that was just performed by `perform_move`.
+    fn undo_performed_move(&mut self, performed_move: PerformedMove) {
+        // Restore all tiles that changed to their state before the change.
+        for (pos, tile) in performed_move.changed_tiles {
+            self.board.set_or_remove_tile(&pos, tile);
+        }
+    }
+
     /// Get the legal moves for a piece.
     ///
     /// Legal moves are defined as moves that:
@@ -173,20 +233,13 @@ impl Game {
             // Ensure the move does not move into a state of check.
             // Attempt the move.
 
-            // Save tile on square.
-            let old_tile = self.board.get_tile(move_pos);
-
             // Move there by setting the tiles directly.
-            // TODO method here to respect en passant and castling.
-            self.board.set_tile(move_pos, tile);
-            self.board.remove_tile(pos);
-
+            let performed_move = self.perform_move(pos, move_pos);
             let check = self.is_check(&tile.color());
             // This move resulted in a state of check. It is not a legal move.
 
             // Undo the move.
-            self.board.set_or_remove_tile(move_pos, old_tile);
-            self.board.set_tile(pos, tile);
+            self.undo_performed_move(performed_move);
 
             !check
         });
@@ -210,7 +263,7 @@ impl Game {
     /// 
     /// If the `include_castling` parameter is `true`, castling will also be checked
     /// and added to the moveset when applicable.
-    /// 
+    ///
     /// ## Panics
     /// This function will panic if there is no piece at the tile.
     pub(super) fn get_pseudo_legal_moves(&self, pos: &BoardPos, include_castling: bool) -> HashSet<BoardPos> {
@@ -711,5 +764,37 @@ mod tests {
         game.move_piece(&"c4".parse().unwrap(), &"b3".parse().unwrap()).unwrap();
 
         assert_eq!(game.to_fen(), "4k3/8/8/8/8/1p6/8/4K3 w - - 0 0");
+    }
+
+    #[test]
+    fn discovery_via_en_passant() {
+        let mut game = Game::from_fen("8/8/8/8/1R2p1k1/8/3P4/4K3 w - - 0 1").unwrap();
+
+        game.move_piece(&"d2".parse().unwrap(), &"d4".parse().unwrap()).unwrap();
+
+        let moves = game.get_legal_moves(&"e4".parse().unwrap()).unwrap();
+
+        // Taking en passant, which unblocks the rook to attack the king. This move is illegal.
+        assert_moves_dont_exist(&moves, "d3");
+    }
+
+    #[test]
+    fn undoing_performed_castling() {
+        let mut game = Game::from_fen("r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1").unwrap();
+
+        let performed_move = game.perform_move(&"e1".parse().unwrap(), &"c1".parse().unwrap());
+        game.undo_performed_move(performed_move);
+
+        assert_eq!(game.to_fen(), "r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 0");
+    }
+
+    #[test]
+    fn undoing_performed_en_passant() {
+        let mut game = Game::from_fen("4k3/8/8/1pP5/8/8/8/4K3 w - b6 0 1").unwrap();
+
+        let performed_move = game.perform_move(&"c5".parse().unwrap(), &"b6".parse().unwrap());
+        game.undo_performed_move(performed_move);
+
+        assert_eq!(game.to_fen(), "4k3/8/8/1pP5/8/8/8/4K3 w - b6 0 0");
     }
 }
