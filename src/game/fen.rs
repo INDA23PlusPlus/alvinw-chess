@@ -15,6 +15,7 @@ pub enum FenParseError<'a> {
 
 impl Game {
 
+    /// Create a new `Game` instance from a FEN (Forsyth–Edwards Notation) string.
     pub fn from_fen(fen: &str) -> Result<Self, FenParseError> {
         let mut iter = fen.split_whitespace();
         
@@ -71,6 +72,8 @@ impl Game {
         })
     }
 
+    /// Export the current state of the game to a FEN (Forsyth–Edwards Notation)
+    /// string.
     pub fn to_fen(&self) -> String {
         let mut str = String::new();
         str.push_str(&self.board.to_fen_placement_data());

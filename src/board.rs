@@ -36,6 +36,10 @@ impl Board {
         self.data[pos.rank() as usize][pos.file() as usize] = tile;
     }
 
+    /// Create a `Board` instance from FEN placement data.
+    /// 
+    /// Note that the string should not be the entire FEN string, but should only be
+    /// the first part of the FEN data, the part known as the "placement data".
     pub fn from_fen_placement_data(fen: &str) -> Result<Self, FenParseError> {
         let mut board = Board::empty();
 
@@ -71,6 +75,11 @@ impl Board {
         Ok(board)
     }
 
+
+    /// Export the `Board` to the FEN placement data.
+    /// 
+    /// Note that the string is not be the entire FEN string, but only the first
+    /// part of the FEN data, the part known as the "placement data".
     pub fn to_fen_placement_data(&self) -> String {
         let mut str = String::new();
         for rank in (0..8_u8).rev() {

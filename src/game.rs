@@ -34,6 +34,16 @@ impl Game {
     /// exists if low-level access and modification to the board is required.
     pub fn board(&mut self) -> &mut Board { &mut self.board }
 
+    /// Get the `Color` of the team that is next to make a move.
+    pub fn current_turn(&self) -> Color {
+        self.current_turn
+    }
+
+    /// Get the tile at the specified position, or `None` if the square is empty.
+    pub fn get_tile(&self, pos: &BoardPos) -> Option<Tile> {
+        self.board.get_tile(pos)
+    }
+
     /// Get the current game state. This method must be called after each move.
     /// 
     /// See the `GameState` enum for the possible values.

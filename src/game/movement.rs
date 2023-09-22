@@ -39,6 +39,29 @@ struct PerformedMove {
 
 impl Game {
 
+    /// Move a piece.
+    /// 
+    /// This method will move the piece, increment the move counter and change the
+    /// turn to the opposite color.
+    /// 
+    /// In case the `to` and `from` positions describe an en passant or castling
+    /// move, other pieces than those two positions will also be changed in order
+    /// to complete the en passant or castling.
+    /// 
+    /// This method should always be immediately followed by `get_status` since a
+    /// move might result in the player needing to promote a piece. See the
+    /// `promote` method.
+    /// 
+    /// # Errors
+    /// If there is no tile (no piece) at the position `NoTile` will be errored.
+    /// 
+    /// If the piece at `from` is of the wrong color, aka the color who's turn it is
+    /// not to play right now, this method will error with `NotCurrentTurn`.
+    /// 
+    /// In case the move is not valid, `InvalidMove` is returned. If this method
+    /// was immediately preceded by `get_legal_move` on `from`, and the `to`
+    /// position was a part of the returned moveset, this method will never error
+    /// since the move is guaranteed to be valid.
     pub fn move_piece(&mut self, from: &BoardPos, to: &BoardPos) -> Result<(), MovePieceError> {
         let moveset = match self.get_legal_moves(from) {
             Ok(moveset) => moveset,

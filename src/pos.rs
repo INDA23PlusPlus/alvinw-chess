@@ -53,6 +53,9 @@ impl BoardPos {
         self.rank
     }
 
+    /// Create a new `BoardPos` instance that is offset relative to this position.
+    ///
+    /// In case the resulting position is outside the board, `None` is returned.
     pub fn offset(&self, delta_file: i8, delta_rank: i8) -> Option<BoardPos> {
         let file = self.file as i8 + delta_file;
         let rank = self.rank as i8 + delta_rank;
