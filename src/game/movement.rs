@@ -384,11 +384,12 @@ impl Game {
                 // first move if it is located at the starting rank for pawns.
                 let is_first_move = pos.rank() == first_rank;
 
-                // Moving forward one tile is always possible (assuming it is valid in other
-                // regards).
-                self.try_moves_once(&mut moveset, &pos, &tile.color(), [
-                    (0, dir)
-                ]);
+                // Moving forward one tile is possible when it is an empty tile since pawns are
+                // not allowed to capture pieces forward.
+                self.try_specific_move(&mut moveset, &pos, &tile.color(),
+                    MoveType::ToEmpty,
+                    0, dir
+                );
 
                 // Moving two tiles is only possible if it is the pawn's first move and...
                 if is_first_move {
@@ -399,15 +400,16 @@ impl Game {
 
                     // ...there is no piece, regardless of color, one tile forward.
                     if piece_one_forward.is_none() {
-                        self.try_moves_once(&mut moveset, &pos, &tile.color(), [
-                            (0, 2 * dir)
-                        ]);
+                        self.try_specific_move(&mut moveset, &pos, &tile.color(),
+                            MoveType::ToEmpty,
+                            0, 2 * dir
+                        );
                     }
                 }
 
                 // Diagonal moves are only possible when attacking.
-                self.try_attacking_move(&mut moveset, &pos, &tile.color(), -1, dir);
-                self.try_attacking_move(&mut moveset, &pos, &tile.color(), 1, dir);
+                self.try_specific_move(&mut moveset, &pos, &tile.color(), MoveType::Attacking, -1, dir);
+                self.try_specific_move(&mut moveset, &pos, &tile.color(), MoveType::Attacking, 1, dir);
 
                 // En passant
                 if let Some(en_passant_target) = &self.en_passant_target {
@@ -477,24 +479,21 @@ impl Game {
         Some((pos, MoveType::Attacking))
     }
 
-    /// Test an attacking move, and if it is a valid move, return it.
+    /// Test a move, and if it is a valid move, add it to the moveset.
     ///
-    /// Attacking moves are only valid if it involves capturing an enemy piece.
-    fn try_attacking_move(&self,
+    /// Only accepts moves of a specific `MoveType`.
+    fn try_specific_move(&self,
         moveset: &mut HashSet<BoardPos>,
         start: &BoardPos,
         friendly_color: &Color,
+        move_type: MoveType,
         delta_file: i8,
         delta_rank: i8,
     ) {
         let option_move = self.try_move_once(start, delta_file, delta_rank, friendly_color);
-        if let Some((pos, move_type)) = option_move {
-            match move_type {
-                MoveType::ToEmpty => {},
-                MoveType::Attacking => {
-                    // Only attacking moves are valid.
-                    moveset.insert(pos);
-                }
+        if let Some((pos, found_move_type)) = option_move {
+            if found_move_type == move_type {
+                moveset.insert(pos);
             }
         }
     }
@@ -745,6 +744,20 @@ mod tests {
         
         let actual = game.get_legal_moves(&pos).unwrap();
         assert_moves(&actual, "d5 e5");
+    }
+
+    #[test]
+    fn non_attacking_pawn_moves() {
+        let mut game = Game::from_fen("4k3/8/8/8/4p3/3ppp2/4P3/4K3 w - - 0 1").unwrap();
+        let actual = game.get_legal_moves(&"e2".parse().unwrap()).unwrap();
+        assert_moves(&actual, "d3 f3");
+    }
+
+    #[test]
+    fn non_attacking_double_pawn_moves() {
+        let mut game = Game::from_fen("4k3/8/8/8/4p3/3p1p2/4P3/4K3 w - - 0 1").unwrap();
+        let actual = game.get_legal_moves(&"e2".parse().unwrap()).unwrap();
+        assert_moves(&actual, "d3 e3 f3");
     }
 
     // Movement tests including check
