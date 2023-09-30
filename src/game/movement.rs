@@ -549,6 +549,11 @@ impl Game {
             None => return
         };
 
+        if self.board.get_tile(&cross_over_pos).is_some() {
+            // The position being crossed over must be empty.
+            return;
+        }
+
         let enemy_color = color.opposite();
 
         if self.is_attacked_by(&cross_over_pos, &enemy_color) {
@@ -798,6 +803,16 @@ mod tests {
         game.move_piece(&"h8".parse().unwrap(), &"h7".parse().unwrap()).unwrap();
 
         assert_eq!(game.to_fen(), "rnbqkbn1/pppppppr/7p/8/8/P7/RPPPPPPP/1NBQKBNR w Kq - 4 3");
+    }
+
+    #[test]
+    fn castling_not_possible2() {
+        let mut game = Game::from_fen("rnbqkbnr/pppppppp/8/8/8/5N2/PPPPPPPP/RNBQKB1R w KQkq - 0 1").unwrap();
+
+        let white_king_pos = "e1".parse().unwrap();
+        let white_moves = game.get_legal_moves(&white_king_pos).unwrap();
+
+        assert_moves(&white_moves, "");
     }
 
     #[test]
